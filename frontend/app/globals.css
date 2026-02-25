@@ -24,3 +24,80 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* Utility Classes */
+.card {
+  @apply bg-white dark:bg-neutral-900 rounded-lg border border-neutral-200 dark:border-neutral-700;
+}
+
+.card-pad {
+  @apply card p-6;
+}
+
+.badge {
+  @apply px-3 py-1 rounded-full text-sm font-medium;
+}
+
+.badge-positive {
+  @apply badge bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300;
+}
+
+.badge-negative {
+  @apply badge bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300;
+}
+
+.section-title {
+  @apply text-2xl font-bold text-black dark:text-white mb-4;
+}
+
+.page-title {
+  @apply text-3xl font-bold text-black dark:text-white mb-2;
+}
+
+.page-subtitle {
+  @apply text-neutral-600 dark:text-neutral-400;
+}
+
+.text-muted {
+  @apply text-neutral-600 dark:text-neutral-400;
+}
+
+.text-muted-sm {
+  @apply text-xs text-neutral-500 dark:text-neutral-400;
+}
+
+.btn-primary {
+  @apply px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 transition;
+}
+
+.stat-label {
+  @apply text-sm text-neutral-600 dark:text-neutral-400 mb-2;
+}
+
+.stat-value {
+  @apply text-2xl font-bold text-black dark:text-white mb-1;
+}
+
+.stat-change {
+  @apply text-xs font-medium text-green-600 dark:text-green-400;
+}
+
+.table-header {
+  @apply px-6 py-4 text-left text-xs font-semibold text-neutral-700 dark:text-neutral-300 uppercase;
+}
+
+.table-cell {
+  @apply px-6 py-4 text-neutral-700 dark:text-neutral-300;
+}
+
+.table-row {
+  @apply border-b border-neutral-100 dark:border-neutral-800 hover:bg-neutral-50 dark:hover:bg-neutral-800 transition;
+}
+
+.error-banner {
+  @apply bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 p-4;
+}
+
+.error-text {
+  @apply text-sm text-red-700 dark:text-red-300;
+}
