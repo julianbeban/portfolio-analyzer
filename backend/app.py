@@ -5,7 +5,7 @@ import pandas as pd
 import numpy as np
 
 app = Flask(__name__)
-CORS(app)  # Allow requests from Next.js frontend
+CORS(app,resources={r"/api/*": {"origins": "http://localhost:3000"}})  # Allow requests from Next.js frontend
 
 @app.route('/api/analyze', methods=['POST'])
 def analyze_portfolio():
@@ -15,9 +15,42 @@ def analyze_portfolio():
     try:
         data = request.get_json()
         tickers = data.get('tickers', [])
-        
+        weights = data.get('weights', None)  
+
         if not tickers:
             return jsonify({'error': 'No tickers provided'}), 400
+        
+        if not isinstance(tickers, list):
+            return jsonify({'error': 'Tickers must be a list'}), 400
+        
+        if len(tickers) < 2:
+            return jsonify({'error': 'Need at least 2 tickers for correlation analysis'}), 400
+        
+        if len(tickers) > 20:
+            return jsonify({'error': 'Maximum 20 tickers allowed'}), 400
+        
+        # Clean tickers (uppercase, strip whitespace)
+        tickers = [ticker.strip().upper() for ticker in tickers]
+
+        if weights is not None:
+            if not isinstance(weights, list):
+                return jsonify({'error': 'Weights must be a list'}), 400
+            
+            if len(weights) != len(tickers):
+                return jsonify({'error': 'Number of weights must match number of tickers'}), 400
+            
+            if any(w < 0 for w in weights):
+                return jsonify({'error': 'Weights must be non-negative'}), 400
+            
+            # Normalize weights to sum to 1
+            total_weight = sum(weights)
+            if total_weight == 0:
+                return jsonify({'error': 'Weights cannot all be zero'}), 400
+            
+            weights = [w / total_weight for w in weights]
+        else:
+            # Default to equal weights
+            weights = [1.0 / len(tickers)] * len(tickers)
         
         # Download 1 year of historical data
         print(f"Fetching data for: {tickers}")
@@ -69,9 +102,8 @@ def analyze_portfolio():
         # 50-day moving average (most recent value)
         ma_50 = stock_data.rolling(window=50).mean().iloc[-1]
         
-        # PORTFOLIO METRICS (Equal Weighted)
-        # Calculate equal-weighted portfolio returns
-        portfolio_returns = returns.mean(axis=1)  # Equal weight = average across stocks
+        # 200-day moving average (most recent value)
+        ma_200 = stock_data.rolling(window=200).mean().iloc[-1]
         
         # Fetch S&P 500 data for beta calculation
         sp500_raw = yf.download('^GSPC', period='1y', progress=False)
@@ -88,16 +120,57 @@ def analyze_portfolio():
             elif 'Adj Close' in sp500_raw.columns:
                 sp500_prices = sp500_raw['Adj Close']
             else:
-                sp500_prices = sp500_raw.iloc[:, 0]  # First column
+                sp500_prices = sp500_raw.iloc[:, 0]
         
         sp500_returns = sp500_prices.pct_change()
         
-        # Align dates between portfolio and S&P 500
+        # Individual stock betas and Sharpe ratios
+        individual_betas = {}
+        individual_sharpe_ratios = {}
+        
+        for ticker in stock_data.columns:
+            # Align stock returns with S&P 500 returns
+            aligned = pd.DataFrame({
+                'stock': returns[ticker],
+                'sp500': sp500_returns
+            }).dropna()
+            
+            # Beta calculation
+            covariance = aligned['stock'].cov(aligned['sp500'])
+            sp500_variance = aligned['sp500'].var()
+            beta = covariance / sp500_variance if sp500_variance != 0 else 0
+            individual_betas[ticker] = round(beta, 3)
+            
+            # Sharpe ratio (assuming 0% risk-free rate)
+            stock_return = aligned['stock'].mean() * 252  # Annualized
+            stock_volatility = aligned['stock'].std() * np.sqrt(252)
+            sharpe = stock_return / stock_volatility if stock_volatility != 0 else 0
+            individual_sharpe_ratios[ticker] = round(sharpe, 3)
+        
+        # RSI (Relative Strength Index) for each stock
+        def calculate_rsi(prices, period=14):
+            """Calculate RSI for a price series"""
+            delta = prices.diff()
+            gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+            rs = gain / loss
+            rsi = 100 - (100 / (1 + rs))
+            return rsi.iloc[-1]  # Most recent value
+        
+        rsi_values = {}
+        for ticker in stock_data.columns:
+            rsi = calculate_rsi(stock_data[ticker])
+            rsi_values[ticker] = round(rsi, 2) if not pd.isna(rsi) else None
+        
+        # PORTFOLIO METRICS (Equal Weighted)
+        # Calculate equal-weighted portfolio returns
+        portfolio_returns = returns.mean(axis=1)  # Equal weight = average across stocks
+
         aligned_data = pd.DataFrame({
             'portfolio': portfolio_returns,
             'sp500': sp500_returns
         }).dropna()
-        
+
         # Portfolio Sharpe Ratio (assuming 0% risk-free rate)
         portfolio_return = aligned_data['portfolio'].mean() * 252  # Annualized
         portfolio_volatility = aligned_data['portfolio'].std() * np.sqrt(252)
@@ -120,6 +193,11 @@ def analyze_portfolio():
             'volatility': volatility.round(4).to_dict(),
             'current_prices': stock_data.iloc[-1].round(2).to_dict(),
             'ma_50': ma_50.round(2).to_dict(),
+            'ma_200': ma_200.round(2).to_dict(),  
+            'individual_betas': individual_betas,  
+            'individual_sharpe_ratios': individual_sharpe_ratios,  
+            'rsi': rsi_values, 
+            'weights': weights,
             'portfolio_metrics': {
                 'sharpe_ratio': round(sharpe_ratio, 3),
                 'beta': round(beta, 3),
