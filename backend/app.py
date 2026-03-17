@@ -219,6 +219,102 @@ def health_check():
     """Simple health check endpoint"""
     return jsonify({'status': 'healthy', 'message': 'Portfolio Analyzer API is running'}), 200
 
+@app.route('/api/portfolio', methods=['GET'])
+def get_portfolio():
+    """Returns portfolio overview stats"""
+    try:
+        portfolio_data = {
+            'totalValue': 156843.50,
+            'todayGain': 3521.20,
+            'todayGainPercent': 2.3,
+            'ytdReturn': 18.5,
+            'cashAvailable': 25400.00,
+            'buyingPower': 50800.00
+        }
+        return jsonify(portfolio_data), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/holdings', methods=['GET'])
+def get_holdings():
+    """Returns user's current stock holdings"""
+    try:
+        holdings = [
+            {'symbol': 'AAPL', 'shares': 50, 'avgCost': 185.30, 'current': 234.50},
+            {'symbol': 'MSFT', 'shares': 30, 'avgCost': 405.20, 'current': 421.30},
+            {'symbol': 'VOO', 'shares': 25, 'avgCost': 418.50, 'current': 486.80},
+            {'symbol': 'BRK.B', 'shares': 40, 'avgCost': 380.40, 'current': 412.60}
+        ]
+        
+        response = []
+        for holding in holdings:
+            gain_amount = (holding['current'] - holding['avgCost']) * holding['shares']
+            gain_percent = ((holding['current'] - holding['avgCost']) / holding['avgCost']) * 100
+            total_value = holding['current'] * holding['shares']
+            
+            response.append({
+                'symbol': holding['symbol'],
+                'shares': holding['shares'],
+                'avgCost': round(holding['avgCost'], 2),
+                'current': round(holding['current'], 2),
+                'gainAmount': round(gain_amount, 2),
+                'gainPercent': round(gain_percent, 1),
+                'totalValue': round(total_value, 2)
+            })
+        
+        return jsonify(response), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/watchlist', methods=['GET'])
+def get_watchlist():
+    """Returns market watchlist with live data"""
+    try:
+        tickers = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'NVDA']
+        names = {
+            'AAPL': 'Apple Inc.',
+            'MSFT': 'Microsoft Corp.',
+            'GOOGL': 'Alphabet Inc.',
+            'AMZN': 'Amazon.com Inc.',
+            'TSLA': 'Tesla Inc.',
+            'NVDA': 'NVIDIA Corp.'
+        }
+        
+        # Download all data at once (more efficient than individual calls)
+        data = yf.download(tickers, period='5d', progress=False)
+        
+        watchlist = []
+        for ticker in tickers:
+            try:
+                # Get current price from today's close
+                current_price = data['Close'][ticker].iloc[-1] if len(tickers) > 1 else data['Close'].iloc[-1]
+                
+                # Get price from 1 day ago to calculate change
+                prev_price = data['Close'][ticker].iloc[-2] if len(tickers) > 1 else data['Close'].iloc[-2]
+                
+                # Calculate percentage change
+                change = ((current_price - prev_price) / prev_price) * 100
+
+                # Get volume (formatted)
+                volume = data['Volume'][ticker].iloc[-1] if len(tickers) > 1 else data['Volume'].iloc[-1]
+                volume_str = f"{volume/1e6:.1f}M" if volume > 1e6 else f"{volume/1e3:.1f}K"
+                
+                watchlist.append({
+                    'symbol': ticker,
+                    'name': names.get(ticker, ticker),
+                    'price': round(current_price, 2),
+                    'change': round(change, 2),
+                    'volume': volume_str
+                })
+            except Exception as e:
+                print(f"Error processing {ticker}: {e}")
+                continue
+
+        return jsonify(watchlist), 200
+    except Exception as e:
+        print(f"Error: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
 if __name__ == '__main__':
     print("Starting Flask server on http://localhost:5001")
     app.run(debug=True, port=5001, host='127.0.0.1')
