@@ -1,5 +1,9 @@
 Flask
+Flask-JWT-Extended
+Flask-SQLAlchemy
+python-dotenv
 flask-cors
 yfinance
 pandas
 numpy
+Werkzeug

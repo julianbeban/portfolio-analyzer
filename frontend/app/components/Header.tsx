@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import UserMenu from './UserMenu';
 
 export default function Header() {
   return (
@@ -21,9 +22,7 @@ export default function Header() {
           <Link href="/settings" className="hover:text-black dark:hover:text-white transition">Settings</Link>
         </nav>
         <div className="flex gap-2">
-          <button className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 transition">
-            Add Stock
-          </button>
+          <UserMenu/>
         </div>
       </div>
     </header>

@@ -1,11 +1,127 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
+from flask_sqlalchemy import SQLAlchemy
+from werkzeug.security import generate_password_hash, check_password_hash
+from datetime import datetime
 import yfinance as yf
 import pandas as pd
 import numpy as np
+import os
+from dotenv import load_dotenv
+from models import db, User
+
+load_dotenv()
 
 app = Flask(__name__)
-CORS(app)  # Allow requests from Next.js frontend
+CORS(app)
+
+# Configuration
+app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')
+app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'your-secret-key-change-in-production')
+
+# Initialize extensions
+db.init_app(app)
+jwt = JWTManager(app)
+
+# Create tables
+with app.app_context():
+    db.create_all()
+
+# ==================== AUTH ROUTES ====================
+
+@app.route('/api/auth/signup', methods=['POST'])
+def signup():
+    """Register a new user"""
+    try:
+        data = request.get_json()
+        
+        # Validation
+        if not data or not data.get('email') or not data.get('password') or not data.get('displayName'):
+            return jsonify({'error': 'Missing required fields: email, password, displayName'}), 400
+        
+        email = data.get('email').strip().lower()
+        password = data.get('password')
+        display_name = data.get('displayName').strip()
+        
+        # Check password length
+        if len(password) < 8:
+            return jsonify({'error': 'Password must be at least 8 characters'}), 400
+        
+        # Check if user exists
+        if User.query.filter_by(email=email).first():
+            return jsonify({'error': 'Email already registered'}), 409
+        
+        # Create new user
+        user = User(email=email, display_name=display_name)
+        user.set_password(password)
+        db.session.add(user)
+        db.session.commit()
+        
+        # Create token
+        access_token = create_access_token(identity=user.id)
+        
+        return jsonify({
+            'message': 'User created successfully',
+            'user': user.to_dict(),
+            'access_token': access_token
+        }), 201
+    
+    except Exception as e:
+        db.session.rollback()
+        print(f"Signup error: {str(e)}")
+        return jsonify({'error': 'Failed to create user'}), 500
+
+@app.route('/api/auth/login', methods=['POST'])
+def login():
+    """Login user and return JWT token"""
+    try:
+        data = request.get_json()
+        
+        # Validation
+        if not data or not data.get('email') or not data.get('password'):
+            return jsonify({'error': 'Missing email or password'}), 400
+        
+        email = data.get('email').strip().lower()
+        password = data.get('password')
+        
+        # Find user
+        user = User.query.filter_by(email=email).first()
+        
+        if not user or not user.check_password(password):
+            return jsonify({'error': 'Invalid email or password'}), 401
+        
+        # Create token
+        access_token = create_access_token(identity=user.id)
+        
+        return jsonify({
+            'message': 'Login successful',
+            'user': user.to_dict(),
+            'access_token': access_token
+        }), 200
+    
+    except Exception as e:
+        print(f"Login error: {str(e)}")
+        return jsonify({'error': 'Login failed'}), 500
+
+@app.route('/api/auth/me', methods=['GET'])
+@jwt_required()
+def get_current_user():
+    """Get current user info"""
+    try:
+        user_id = get_jwt_identity()
+        user = User.query.get(user_id)
+        
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+        
+        return jsonify({'user': user.to_dict()}), 200
+    
+    except Exception as e:
+        print(f"Get user error: {str(e)}")
+        return jsonify({'error': 'Failed to get user'}), 500
+
+# ==================== PORTFOLIO ROUTES ====================
 
 @app.route('/api/analyze', methods=['POST'])
 def analyze_portfolio():
