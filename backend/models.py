@@ -7,6 +7,8 @@ db = SQLAlchemy()
 class User(db.Model):
     __tablename__ = 'users'
     
+    stocks = db.relationship('Stock', backref='user', lazy=True, cascade='all, delete-orphan')
+    
     id = db.Column(db.Integer, primary_key=True)
     email = db.Column(db.String(120), unique=True, nullable=False)
     display_name = db.Column(db.String(120), nullable=False)
@@ -30,3 +32,14 @@ class User(db.Model):
             'displayName': self.display_name,
             'createdAt': self.created_at.isoformat(),
         }
+
+class Stock(db.Model):
+    __tablename__ = 'stocks'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    ticker = db.Column(db.String(10), nullable=False)
+    shares = db.Column(db.Float, nullable=False)
+    average_cost = db.Column(db.Float, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

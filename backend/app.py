@@ -1,6 +1,5 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime
@@ -9,7 +8,8 @@ import pandas as pd
 import numpy as np
 import os
 from dotenv import load_dotenv
-from models import db, User
+from models import db, User, Stock
+import math
 
 load_dotenv()
 
@@ -19,11 +19,9 @@ CORS(app)
 
 # Configuration
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')
-app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'your-secret-key-change-in-production')
 
 # Initialize extensions
 db.init_app(app)
-jwt = JWTManager(app)
 
 # Create tables
 with app.app_context():
@@ -59,13 +57,9 @@ def signup():
         db.session.add(user)
         db.session.commit()
         
-        # Create token
-        access_token = create_access_token(identity=user.id)
-        
         return jsonify({
             'message': 'User created successfully',
-            'user': user.to_dict(),
-            'access_token': access_token
+            'user': user.to_dict()
         }), 201
     
     except Exception as e:
@@ -92,35 +86,14 @@ def login():
         if not user or not user.check_password(password):
             return jsonify({'error': 'Invalid email or password'}), 401
         
-        # Create token
-        access_token = create_access_token(identity=user.id)
-        
         return jsonify({
-            'message': 'Login successful',
-            'user': user.to_dict(),
-            'access_token': access_token
-        }), 200
+            'message': 'User created successfully',
+            'user': user.to_dict()
+        }), 201
     
     except Exception as e:
         print(f"Login error: {str(e)}")
         return jsonify({'error': 'Login failed'}), 500
-
-@app.route('/api/auth/me', methods=['GET'])
-@jwt_required()
-def get_current_user():
-    """Get current user info"""
-    try:
-        user_id = get_jwt_identity()
-        user = User.query.get(user_id)
-        
-        if not user:
-            return jsonify({'error': 'User not found'}), 404
-        
-        return jsonify({'user': user.to_dict()}), 200
-    
-    except Exception as e:
-        print(f"Get user error: {str(e)}")
-        return jsonify({'error': 'Failed to get user'}), 500
 
 # ==================== PORTFOLIO ROUTES ====================
 
@@ -338,30 +311,97 @@ def health_check():
 
 @app.route('/api/portfolio', methods=['GET'])
 def get_portfolio():
-    """Returns portfolio overview stats"""
     try:
-        portfolio_data = {
-            'totalValue': 156843.50,
-            'todayGain': 3521.20,
-            'todayGainPercent': 2.3,
+        user_id = request.headers.get('X-User-ID')
+        
+        if not user_id:
+            return jsonify({'error': 'Unauthorized'}), 401
+        
+        user_id = int(user_id)
+        user = User.query.get(user_id)
+        if not user:
+            return jsonify({'error': 'Unauthorized'}), 401
+        
+        stocks = Stock.query.filter_by(user_id=user_id).all()
+        if not stocks:
+            return jsonify({
+                'totalValue': 0, 'todayGain': 0, 'todayGainPercent': 0,
+                'portfolioReturn': 0, 'ytdReturn': 0, 'buyingPower': 0
+            }), 200
+        
+        total_value = 0
+        total_investment = 0
+        total_gain = 0
+        total_gain_percent = 0
+        
+        for stock in stocks:
+            try:
+                current_price = yf.Ticker(stock.ticker).info.get('currentPrice', stock.average_cost)
+                # Convert NaN to average_cost if needed
+                if current_price is None or (isinstance(current_price, float) and math.isnan(current_price)):
+                    current_price = stock.average_cost
+                
+                ticker = yf.Ticker(stock.ticker)
+                yesterday_price = ticker.info["previousClose"]
+                
+                if not yesterday_price:
+                    yesterday_price = current_price
+                
+                total_investment += stock.shares * stock.average_cost
+                total_value += stock.shares * current_price
+                total_gain += (current_price - yesterday_price) * stock.shares
+                if yesterday_price > 0:
+                    total_gain_percent += ((current_price - yesterday_price) / yesterday_price) * stock.shares
+            except Exception as e:
+                print(f"Error fetching {stock.ticker}: {e}")
+                # Use average cost as fallback for this stock
+                total_investment += stock.shares * stock.average_cost
+                total_value += stock.shares * stock.average_cost
+                continue
+        
+        portfolio_return = ((total_value - total_investment) / total_investment * 100) if total_investment > 0 else 0
+        
+        return jsonify({
+            'totalValue': float(round(total_value, 2)),
+            'todayGain': float(round(total_gain, 2)),
+            'todayGainPercent': float(round(total_gain_percent, 2)),
+            'portfolioReturn': float(round(portfolio_return, 2)),
             'ytdReturn': 18.5,
-            'cashAvailable': 25400.00,
-            'buyingPower': 50800.00
-        }
-        return jsonify(portfolio_data), 200
+            'buyingPower': 0
+        }), 200
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        print(f"Portfolio error: {e}")
+        return jsonify({'error': 'Failed to fetch portfolio data'}), 500
 
 @app.route('/api/holdings', methods=['GET'])
 def get_holdings():
-    """Returns user's current stock holdings"""
     try:
-        holdings = [
-            {'symbol': 'AAPL', 'shares': 50, 'avgCost': 185.30, 'current': 234.50},
-            {'symbol': 'MSFT', 'shares': 30, 'avgCost': 405.20, 'current': 421.30},
-            {'symbol': 'VOO', 'shares': 25, 'avgCost': 418.50, 'current': 486.80},
-            {'symbol': 'BRK.B', 'shares': 40, 'avgCost': 380.40, 'current': 412.60}
-        ]
+        user_id = request.headers.get('X-User-ID')
+        if not user_id:
+            return jsonify({'error': 'Unauthorized'}), 401
+        
+        user_id = int(user_id)  # Convert to int
+        user = User.query.get(user_id)
+        if not user:
+            return jsonify({'error': 'Unauthorized'}), 401
+        
+        stocks = Stock.query.filter_by(user_id=user_id).all()
+        if not stocks:
+            return jsonify([]), 200
+        
+        holdings = []  # Initialize
+        for stock in stocks:
+            try:
+                current_price = yf.Ticker(stock.ticker).info.get('currentPrice', stock.average_cost)
+                holdings.append({
+                    'symbol': stock.ticker,
+                    'shares': stock.shares,
+                    'avgCost': stock.average_cost,
+                    'current': current_price
+                })
+            except Exception as e:
+                print(f"Error fetching {stock.ticker}: {e}")
+                continue
         
         response = []
         for holding in holdings:
@@ -381,6 +421,7 @@ def get_holdings():
         
         return jsonify(response), 200
     except Exception as e:
+        print(f"Holdings error: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/watchlist', methods=['GET'])

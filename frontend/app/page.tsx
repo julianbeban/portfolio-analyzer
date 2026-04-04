@@ -29,7 +29,12 @@ interface Stock {
 }
 
 export default function Home() {
-  const [portfolioStats, setPortfolioStats] = useState<PortfolioStat[]>([]);
+  const [portfolioStats, setPortfolioStats] = useState<PortfolioStat[]>([
+    { label: "Total Value", value: "$0.00", change: "–" },
+    { label: "Today's Gain/Loss", value: "$0.00", change: "–" },
+    { label: "Year to Date", value: "+0.00%", change: "–" },
+    { label: "Portfolio Return", value: "$0.00", change: "–" }
+  ]);
   const [holdings, setHoldings] = useState<Holding[]>([]);
   const [watchlist, setWatchlist] = useState<Stock[]>([]);
   const [loading, setLoading] = useState(true);
@@ -38,41 +43,67 @@ export default function Home() {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        setLoading(true);
-        const baseUrl = '/api/proxy';
+      setLoading(true);
+      const baseUrl = '/api/proxy';
 
-        const [statsRes, holdingsRes, watchlistRes] = await Promise.all([
-          fetch(`${baseUrl}?endpoint=portfolio`),
-          fetch(`${baseUrl}?endpoint=holdings`),
-          fetch(`${baseUrl}?endpoint=watchlist`)
-        ]);
+      // Get user ID from API route
+      const userRes = await fetch('/api/user');
+      const { userId } = await userRes.json();
 
-        if (statsRes.ok && holdingsRes.ok && watchlistRes.ok) {
-          const statsData = await statsRes.json();
-          const holdingsData = await holdingsRes.json();
+      // If not logged in, just load watchlist
+      if (!userId) {
+        const watchlistRes = await fetch(`${baseUrl}?endpoint=watchlist`);
+        if (watchlistRes.ok) {
           const watchlistData = await watchlistRes.json();
-
-          setPortfolioStats([
-            { label: "Total Value", value: `$${statsData.totalValue?.toLocaleString('en-US', {minimumFractionDigits: 2})}`, change: `+${statsData.todayGainPercent}%` },
-            { label: "Today's Gain/Loss", value: `$${statsData.todayGain?.toLocaleString('en-US', {minimumFractionDigits: 2})}`, change: `+${statsData.todayGainPercent}%` },
-            { label: "Year to Date", value: `+${statsData.ytdReturn}%`, change: "vs S&P 500" },
-            { label: "Cash Available", value: `$${statsData.cashAvailable?.toLocaleString('en-US', {minimumFractionDigits: 2})}`, change: `${((statsData.cashAvailable / (statsData.totalValue + statsData.cashAvailable)) * 100).toFixed(1)}% of total` },
-          ]);
-
-          setHoldings(holdingsData);
           setWatchlist(watchlistData);
-          setError('');
         }
-      } catch (err) {
-        console.error('Error fetching data:', err);
-        setError('Failed to load data. Make sure backend is running on http://localhost:5001');
-      } finally {
+        setError('');
         setLoading(false);
+        return;
       }
-    };
 
-    fetchData();
-  }, []);
+      const headers = {
+        'X-User-ID': userId.toString()
+      };
+
+      // Try to fetch authenticated data, but don't break if it fails
+      const [statsRes, holdingsRes, watchlistRes] = await Promise.all([
+        fetch(`${baseUrl}?endpoint=portfolio`, { headers }),
+        fetch(`${baseUrl}?endpoint=holdings`, { headers }),
+        fetch(`${baseUrl}?endpoint=watchlist`, { headers })
+      ]);
+
+      // Always load watchlist (public data)
+      if (watchlistRes.ok) {
+        const watchlistData = await watchlistRes.json();
+        setWatchlist(watchlistData);
+      }
+
+      // Load portfolio/holdings if available, otherwise keep defaults
+      if (statsRes.ok && holdingsRes.ok) {
+        const statsData = await statsRes.json();
+        const holdingsData = await holdingsRes.json();
+
+        setPortfolioStats([
+          { label: "Total Value", value: `$${statsData.totalValue?.toLocaleString('en-US', {minimumFractionDigits: 2})}`, change: `${statsData.todayGainPercent}%` },
+          { label: "Today's Gain/Loss", value: `$${statsData.todayGain?.toLocaleString('en-US', {minimumFractionDigits: 2})}`, change: `${statsData.todayGainPercent}%` },
+          { label: "Year to Date", value: `+${statsData.ytdReturn}%`, change: "vs S&P 500" },
+          { label: "Portfolio Return", value: `$${statsData.portfolioReturn?.toLocaleString('en-US', {minimumFractionDigits: 2})}`, change: `${((statsData.cashAvailable / (statsData.totalValue + statsData.cashAvailable)) * 100).toFixed(1)}% of total` },
+        ]);
+        setHoldings(holdingsData || []);
+      }
+
+      setError('');
+    } catch (err) {
+      console.error('Error fetching data:', err);
+      // Don't set error - use default values instead
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  fetchData();
+}, []);
 
   return (
     <div className="min-h-screen bg-neutral-50 dark:bg-black">

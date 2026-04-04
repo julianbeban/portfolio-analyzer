@@ -1,16 +1,21 @@
-from sqlalchemy import create_engine, MetaData, Table, select
-import models
-from sqlalchemy.orm import Session
-import os
+from app import app, db
+from models import Stock
 
-engine = create_engine('sqlite:///instance/portfolio.db')
+# with app.app_context():
+#     stocks_data = [
+#         {'ticker': 'AAPL', 'shares': 50, 'average_cost': 185.30},
+#         {'ticker': 'MSFT', 'shares': 30, 'average_cost': 405.20},
+#         {'ticker': 'VOO', 'shares': 25, 'average_cost': 418.50},
+#     ]
+    
+#     for stock_data in stocks_data:
+#         stock = Stock(user_id=2, **stock_data)
+#         db.session.add(stock)
+    
+#     db.session.commit()
+#     print("Test stocks added!")
 
-session = Session(engine)
-
-# session.query(models.User).filter(models.User.email == "baluna26@g.holycross.edu").delete(synchronize_session=False)
-stmt = select(models.User)
-
-for user in session.scalars(stmt):
-   print(user.email)
-   
-session.expire_all()
+with app.app_context():
+    stocks = Stock.query.filter_by(user_id=2).all()
+    for s in stocks:
+        print(f"{s.ticker}: {s.shares} @ ${s.average_cost}")
