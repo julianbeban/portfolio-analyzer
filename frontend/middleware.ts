@@ -16,7 +16,7 @@ import { cookies } from 'next/headers'
 // };
 
 // Protected routes that require authentication
-const protectedRoutes = ['/holdings', '/analysis', '/watchlist', '/settings'];
+const protectedRoutes = ['/holdings', '/transactions', '/analysis', '/watchlist', '/settings'];
 
 // Public routes that should redirect to dashboard if authenticated
 const publicAuthRoutes = ['/signin', '/signup'];

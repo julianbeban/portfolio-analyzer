@@ -8,17 +8,16 @@ import pandas as pd
 import numpy as np
 import os
 from dotenv import load_dotenv
-from models import db, User, Stock
+from models import db, User, Transaction, Holding
 import math
 
 load_dotenv()
 
 app = Flask(__name__)
-CORS(app,resources={r"/api/*": {"origins": "http://localhost:3000"}})  # Allow requests from Next.js frontend
-CORS(app)
+CORS(app,resources={r"/api/*": {"origins": "http://localhost:3000"}})  # Allow requests from Next.js 
 
 # Configuration
-app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')
+app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'sqlite:///instance/portfolio.db')
 
 # Initialize extensions
 db.init_app(app)
@@ -318,55 +317,90 @@ def get_portfolio():
             return jsonify({'error': 'Unauthorized'}), 401
         
         user_id = int(user_id)
-        user = User.query.get(user_id)
+        user = db.session.get(User, user_id)
         if not user:
             return jsonify({'error': 'Unauthorized'}), 401
         
-        stocks = Stock.query.filter_by(user_id=user_id).all()
-        if not stocks:
+        holdings = Holding.query.filter_by(user_id=user_id).all()
+        if not holdings:
             return jsonify({
                 'totalValue': 0, 'todayGain': 0, 'todayGainPercent': 0,
                 'portfolioReturn': 0, 'ytdReturn': 0, 'buyingPower': 0
             }), 200
         
+        # Batch fetch all holdings data at once
+        tickers = [h.ticker for h in holdings]
+        ticker_data = {}
+        
+        try:
+            # Fetch 2 days of data to get current and previous close
+            data = yf.download(tickers, period='2d', progress=False)
+            
+            # Handle single ticker case (returns Series instead of DataFrame)
+            if len(tickers) == 1:
+                ticker_data[tickers[0]] = {
+                    'current': data['Close'].iloc[-1],
+                    'previous': data['Close'].iloc[-2] if len(data) > 1 else data['Close'].iloc[-1]
+                }
+            else:
+                for ticker in tickers:
+                    ticker_data[ticker] = {
+                        'current': data['Close'][ticker].iloc[-1],
+                        'previous': data['Close'][ticker].iloc[-2] if len(data) > 1 else data['Close'][ticker].iloc[-1]
+                    }
+        except Exception as e:
+            print(f"Batch download failed: {e}, falling back to individual calls")
+            # Fallback: use individual ticker fetch
+            for holding in holdings:
+                try:
+                    tick = yf.Ticker(holding.ticker)
+                    current = tick.info.get('currentPrice', holding.average_cost)
+                    previous = tick.info.get('previousClose', current)
+                    ticker_data[holding.ticker] = {'current': current, 'previous': previous}
+                except:
+                    ticker_data[holding.ticker] = {'current': holding.average_cost, 'previous': holding.average_cost}
+        
         total_value = 0
         total_investment = 0
         total_gain = 0
-        total_gain_percent = 0
+        total_previous_value = 0
         
-        for stock in stocks:
+        for holding in holdings:
             try:
-                current_price = yf.Ticker(stock.ticker).info.get('currentPrice', stock.average_cost)
-                # Convert NaN to average_cost if needed
+                prices = ticker_data.get(holding.ticker, {})
+                current_price = prices.get('current', holding.average_cost)
+                yesterday_price = prices.get('previous', current_price)
+                
+                # Handle NaN values
                 if current_price is None or (isinstance(current_price, float) and math.isnan(current_price)):
-                    current_price = stock.average_cost
-                
-                ticker = yf.Ticker(stock.ticker)
-                yesterday_price = ticker.info["previousClose"]
-                
-                if not yesterday_price:
+                    current_price = holding.average_cost
+                if yesterday_price is None or (isinstance(yesterday_price, float) and math.isnan(yesterday_price)):
                     yesterday_price = current_price
                 
-                total_investment += stock.shares * stock.average_cost
-                total_value += stock.shares * current_price
-                total_gain += (current_price - yesterday_price) * stock.shares
-                if yesterday_price > 0:
-                    total_gain_percent += ((current_price - yesterday_price) / yesterday_price) * stock.shares
+                total_investment += holding.shares * holding.average_cost
+                total_value += holding.shares * current_price
+                total_previous_value += holding.shares * yesterday_price
+                total_gain += (current_price - yesterday_price) * holding.shares
             except Exception as e:
-                print(f"Error fetching {stock.ticker}: {e}")
-                # Use average cost as fallback for this stock
-                total_investment += stock.shares * stock.average_cost
-                total_value += stock.shares * stock.average_cost
+                print(f"Error processing {holding.ticker}: {e}")
+                # Use average cost as fallback for this holding
+                total_investment += holding.shares * holding.average_cost
+                total_value += holding.shares * holding.average_cost
+                total_previous_value += holding.shares * holding.average_cost
                 continue
         
-        portfolio_return = ((total_value - total_investment) / total_investment * 100) if total_investment > 0 else 0
+        lifetime_gain = total_value - total_investment
+        portfolio_return = ((lifetime_gain) / total_investment * 100) if total_investment > 0 else 0
+        today_gain_percent = ((total_value - total_previous_value) / total_previous_value * 100) if total_previous_value > 0 else 0
         
         return jsonify({
             'totalValue': float(round(total_value, 2)),
             'todayGain': float(round(total_gain, 2)),
-            'todayGainPercent': float(round(total_gain_percent, 2)),
-            'portfolioReturn': float(round(portfolio_return, 2)),
+            'todayGainPercent': float(round(today_gain_percent, 2)),
+            'portfolioReturn': float(round(lifetime_gain, 2)),
+            'portfolioReturnPercent': float(round(portfolio_return, 2)),
             'ytdReturn': 18.5,
+            'cashAvailable': 0.0,
             'buyingPower': 0
         }), 200
     except Exception as e:
@@ -381,43 +415,74 @@ def get_holdings():
             return jsonify({'error': 'Unauthorized'}), 401
         
         user_id = int(user_id)  # Convert to int
-        user = User.query.get(user_id)
+        user = db.session.get(User, user_id)
         if not user:
             return jsonify({'error': 'Unauthorized'}), 401
         
-        stocks = Stock.query.filter_by(user_id=user_id).all()
-        if not stocks:
+        user_holdings = Holding.query.filter_by(user_id=user_id).all()
+        if not user_holdings:
             return jsonify([]), 200
         
-        holdings = []  # Initialize
-        for stock in stocks:
-            try:
-                current_price = yf.Ticker(stock.ticker).info.get('currentPrice', stock.average_cost)
-                holdings.append({
-                    'symbol': stock.ticker,
-                    'shares': stock.shares,
-                    'avgCost': stock.average_cost,
-                    'current': current_price
-                })
-            except Exception as e:
-                print(f"Error fetching {stock.ticker}: {e}")
-                continue
+        # Batch fetch all holdings data at once
+        tickers = [h.ticker for h in user_holdings]
+        ticker_prices = {}
+        
+        try:
+            # Fetch current prices for all tickers at once
+            data = yf.download(tickers, period='1d', progress=False)
+            
+            # Handle single ticker case
+            if len(tickers) == 1:
+                ticker_prices[tickers[0]] = data['Close'].iloc[-1]
+            else:
+                for ticker in tickers:
+                    ticker_prices[ticker] = data['Close'][ticker].iloc[-1]
+        except Exception as e:
+            print(f"Batch download failed: {e}, falling back to individual calls")
+            # Fallback: use individual ticker fetch
+            for ticker in tickers:
+                try:
+                    tick = yf.Ticker(ticker)
+                    price = tick.info.get('currentPrice')
+                    ticker_prices[ticker] = price if price is not None else None
+                except:
+                    ticker_prices[ticker] = None
         
         response = []
-        for holding in holdings:
-            gain_amount = (holding['current'] - holding['avgCost']) * holding['shares']
-            gain_percent = ((holding['current'] - holding['avgCost']) / holding['avgCost']) * 100
-            total_value = holding['current'] * holding['shares']
-            
-            response.append({
-                'symbol': holding['symbol'],
-                'shares': holding['shares'],
-                'avgCost': round(holding['avgCost'], 2),
-                'current': round(holding['current'], 2),
-                'gainAmount': round(gain_amount, 2),
-                'gainPercent': round(gain_percent, 1),
-                'totalValue': round(total_value, 2)
-            })
+        for holding in user_holdings:
+            try:
+                current_price = ticker_prices.get(holding.ticker)
+                
+                # Handle None or NaN values - use average cost as fallback
+                if current_price is None or (isinstance(current_price, float) and math.isnan(current_price)):
+                    current_price = holding.average_cost
+                
+                gain_amount = (current_price - holding.average_cost) * holding.shares
+                gain_percent = ((current_price - holding.average_cost) / holding.average_cost) * 100 if holding.average_cost > 0 else 0
+                total_value = current_price * holding.shares
+                
+                response.append({
+                    'symbol': holding.ticker,
+                    'shares': holding.shares,
+                    'avgCost': round(holding.average_cost, 2),
+                    'current': round(current_price, 2),
+                    'gainAmount': round(gain_amount, 2),
+                    'gainPercent': round(gain_percent, 1),
+                    'totalValue': round(total_value, 2)
+                })
+            except Exception as e:
+                print(f"Error processing {holding.ticker}: {e}")
+                # Use average cost as fallback
+                response.append({
+                    'symbol': holding.ticker,
+                    'shares': holding.shares,
+                    'avgCost': round(holding.average_cost, 2),
+                    'current': round(holding.average_cost, 2),
+                    'gainAmount': 0,
+                    'gainPercent': 0,
+                    'totalValue': round(holding.average_cost * holding.shares, 2)
+                })
+                continue
         
         return jsonify(response), 200
     except Exception as e:
@@ -438,40 +503,526 @@ def get_watchlist():
             'NVDA': 'NVIDIA Corp.'
         }
         
-        # Download all data at once (more efficient than individual calls)
-        data = yf.download(tickers, period='5d', progress=False)
-        
         watchlist = []
+        
+        try:
+            # Download all data at once (more efficient than individual calls)
+            data = yf.download(tickers, period='5d', progress=False)
+            data_available = True
+        except Exception as e:
+            print(f"Failed to download data: {e}")
+            data_available = False
+        
         for ticker in tickers:
             try:
-                # Get current price from today's close
-                current_price = data['Close'][ticker].iloc[-1] if len(tickers) > 1 else data['Close'].iloc[-1]
+                current_price = 0
+                prev_price = 0
+                change = 0
+                volume_str = "0K"
                 
-                # Get price from 1 day ago to calculate change
-                prev_price = data['Close'][ticker].iloc[-2] if len(tickers) > 1 else data['Close'].iloc[-2]
-                
-                # Calculate percentage change
-                change = ((current_price - prev_price) / prev_price) * 100
-
-                # Get volume (formatted)
-                volume = data['Volume'][ticker].iloc[-1] if len(tickers) > 1 else data['Volume'].iloc[-1]
-                volume_str = f"{volume/1e6:.1f}M" if volume > 1e6 else f"{volume/1e3:.1f}K"
+                if data_available:
+                    try:
+                        # Get current price from today's close
+                        current_price = data['Close'][ticker].iloc[-1] if len(tickers) > 1 else data['Close'].iloc[-1]
+                        
+                        # Get price from 1 day ago to calculate change
+                        prev_price = data['Close'][ticker].iloc[-2] if len(tickers) > 1 else data['Close'].iloc[-2]
+                        
+                        # Handle NaN values from dataframe
+                        if pd.isna(current_price):
+                            current_price = None
+                        if pd.isna(prev_price):
+                            prev_price = None
+                        
+                        # Get volume (formatted)
+                        volume = data['Volume'][ticker].iloc[-1] if len(tickers) > 1 else data['Volume'].iloc[-1]
+                        if pd.isna(volume):
+                            volume = 0
+                        volume_str = f"{volume/1e6:.1f}M" if volume > 1e6 else f"{volume/1e3:.1f}K"
+                        
+                        # If we got NaN from batch data, fall through to individual fetch
+                        if current_price is None or prev_price is None:
+                            raise Exception("NaN values in batch data")
+                        
+                        # Calculate percentage change
+                        change = ((current_price - prev_price) / prev_price) * 100 if prev_price > 0 else 0
+                    except Exception as batch_err:
+                        print(f"Batch data failed for {ticker}: {batch_err}, using individual fetch")
+                        # Fall through to individual ticker fetch
+                        try:
+                            ticker_data = yf.Ticker(ticker)
+                            current_price = ticker_data.info.get('currentPrice')
+                            prev_price = ticker_data.info.get('previousClose')
+                            volume = ticker_data.info.get('volume', 0)
+                            
+                            if current_price is None:
+                                current_price = prev_price if prev_price else 0
+                            if prev_price is None:
+                                prev_price = current_price if current_price else 0
+                            
+                            change = ((current_price - prev_price) / prev_price) * 100 if prev_price > 0 else 0
+                            volume_str = f"{volume/1e6:.1f}M" if volume > 1e6 else f"{volume/1e3:.1f}K"
+                        except Exception as fallback_err:
+                            print(f"Individual fetch failed for {ticker}: {fallback_err}")
+                            current_price = 0
+                            change = 0
+                            volume_str = "0K"
+                else:
+                    # Fallback to individual ticker fetch
+                    try:
+                        ticker_data = yf.Ticker(ticker)
+                        current_price = ticker_data.info.get('currentPrice')
+                        prev_price = ticker_data.info.get('previousClose')
+                        volume = ticker_data.info.get('volume', 0)
+                        
+                        if current_price is None:
+                            current_price = prev_price if prev_price else 0
+                        if prev_price is None:
+                            prev_price = current_price if current_price else 0
+                        
+                        change = ((current_price - prev_price) / prev_price) * 100 if prev_price > 0 else 0
+                        volume_str = f"{volume/1e6:.1f}M" if volume > 1e6 else f"{volume/1e3:.1f}K"
+                    except Exception as fallback_err:
+                        print(f"Individual fetch failed for {ticker}: {fallback_err}")
+                        current_price = 0
+                        change = 0
+                        volume_str = "0K"
                 
                 watchlist.append({
                     'symbol': ticker,
                     'name': names.get(ticker, ticker),
-                    'price': round(current_price, 2),
+                    'price': round(current_price, 2) if current_price else 0,
                     'change': round(change, 2),
                     'volume': volume_str
                 })
             except Exception as e:
                 print(f"Error processing {ticker}: {e}")
-                continue
+                # Always include ticker, even with error
+                watchlist.append({
+                    'symbol': ticker,
+                    'name': names.get(ticker, ticker),
+                    'price': 0,
+                    'change': 0,
+                    'volume': "0K"
+                })
 
         return jsonify(watchlist), 200
     except Exception as e:
-        print(f"Error: {str(e)}")
+        print(f"Watchlist error: {str(e)}")
+        return jsonify({'error': 'Failed to fetch watchlist data'}), 500
+
+# ==================== PORTFOLIO MANAGEMENT ====================
+
+@app.route('/api/import/csv', methods=['POST'])
+def import_csv():
+    """Import transactions from CSV file"""
+    try:
+        user_id = request.headers.get('X-User-ID')
+        if not user_id:
+            return jsonify({'error': 'Unauthorized'}), 401
+        
+        user_id = int(user_id)
+        user = db.session.get(User, user_id)
+        if not user:
+            return jsonify({'error': 'Unauthorized'}), 401
+        
+        # Check if file is present
+        if 'file' not in request.files:
+            return jsonify({'error': 'No file provided'}), 400
+        
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({'error': 'No file selected'}), 400
+        
+        # Get column mapping from request (optional)
+        column_mapping = request.form.get('columnMapping')
+        if column_mapping:
+            import json
+            try:
+                column_mapping = json.loads(column_mapping)
+            except json.JSONDecodeError:
+                column_mapping = None
+        
+        # Read CSV
+        try:
+            df = pd.read_csv(file)
+        except Exception as e:
+            return jsonify({'error': f'Failed to parse CSV: {str(e)}'}), 400
+        
+        if df.empty:
+            return jsonify({'error': 'CSV file is empty'}), 400
+        
+        # Auto-detect columns if mapping not provided
+        if not column_mapping:
+            column_mapping = _detect_csv_columns(df.columns.tolist())
+        
+        # Validate mapping has required columns
+        required = ['ticker', 'transaction_type', 'shares', 'price', 'date']
+        if not all(v is not None for k, v in column_mapping.items() if k in required):
+            return jsonify({
+                'error': 'Missing required columns',
+                'required': required,
+                'detected_columns': df.columns.tolist()
+            }), 400
+        
+        # Process transactions
+        transactions = []
+        errors = []
+        
+        for idx, row in df.iterrows():
+            try:
+                ticker = str(row[column_mapping['ticker']]).strip().upper()
+                trans_type = str(row[column_mapping['transaction_type']]).strip().upper()
+                shares = float(row[column_mapping['shares']])
+                price = float(row[column_mapping['price']])
+                date_str = str(row[column_mapping['date']])
+                
+                # Validate transaction type
+                if trans_type not in ['BUY', 'SELL']:
+                    errors.append(f"Row {idx+2}: Invalid transaction type '{trans_type}'")
+                    continue
+                
+                # Validate shares and price
+                if shares <= 0 or price <= 0:
+                    errors.append(f"Row {idx+2}: Shares and price must be positive")
+                    continue
+                
+                # Parse date
+                try:
+                    from dateutil import parser
+                    trans_date = parser.parse(date_str)
+                except:
+                    errors.append(f"Row {idx+2}: Invalid date format '{date_str}'")
+                    continue
+                
+                # Get commission if available
+                commission = 0
+                if column_mapping.get('commission') is not None:
+                    try:
+                        commission = float(row[column_mapping['commission']])
+                    except:
+                        commission = 0
+                
+                # Get notes if available
+                notes = None
+                if column_mapping.get('notes') is not None:
+                    notes = str(row[column_mapping['notes']]).strip() if pd.notna(row[column_mapping['notes']]) else None
+                
+                transactions.append({
+                    'ticker': ticker,
+                    'type': trans_type,
+                    'shares': shares,
+                    'price': price,
+                    'date': trans_date,
+                    'commission': commission,
+                    'notes': notes
+                })
+            except Exception as e:
+                errors.append(f"Row {idx+2}: {str(e)}")
+        
+        if not transactions:
+            return jsonify({'error': 'No valid transactions found', 'details': errors}), 400
+        
+        # Save transactions to database
+        try:
+            for trans_data in transactions:
+                transaction = Transaction(
+                    user_id=user_id,
+                    ticker=trans_data['ticker'],
+                    transaction_type=trans_data['type'],
+                    shares=trans_data['shares'],
+                    price=trans_data['price'],
+                    transaction_date=trans_data['date'],
+                    commission=trans_data['commission'],
+                    notes=trans_data['notes']
+                )
+                db.session.add(transaction)
+            
+            # Commit all transactions
+            db.session.commit()
+            
+            # Update holdings based on transactions
+            _update_holdings(user_id)
+            
+            return jsonify({
+                'success': True,
+                'imported': len(transactions),
+                'errors': errors if errors else [],
+                'message': f"Successfully imported {len(transactions)} transaction(s)"
+            }), 200
+        
+        except Exception as e:
+            db.session.rollback()
+            return jsonify({'error': f'Database error: {str(e)}'}), 500
+    
+    except Exception as e:
+        print(f"CSV import error: {str(e)}")
+        return jsonify({'error': f'Import failed: {str(e)}'}), 500
+
+@app.route('/api/transactions', methods=['GET'])
+def get_transactions():
+    """Get user's transaction history"""
+    try:
+        user_id = request.headers.get('X-User-ID')
+        if not user_id:
+            return jsonify({'error': 'Unauthorized'}), 401
+        
+        user_id = int(user_id)
+        user = db.session.get(User, user_id)
+        if not user:
+            return jsonify({'error': 'Unauthorized'}), 401
+        
+        # Get all transactions, ordered by date (newest first)
+        transactions = Transaction.query.filter_by(user_id=user_id).order_by(Transaction.transaction_date.desc()).all()
+        
+        return jsonify([t.to_dict() for t in transactions]), 200
+    except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+@app.route('/api/transactions', methods=['POST'])
+def add_transaction():
+    """Add a single transaction manually"""
+    try:
+        user_id = request.headers.get('X-User-ID')
+        if not user_id:
+            return jsonify({'error': 'Unauthorized'}), 401
+        
+        user_id = int(user_id)
+        user = db.session.get(User, user_id)
+        if not user:
+            return jsonify({'error': 'Unauthorized'}), 401
+        
+        data = request.get_json()
+        required = ['ticker', 'type', 'shares', 'price', 'date']
+        
+        if not all(k in data for k in required):
+            return jsonify({'error': f'Missing required fields: {required}'}), 400
+        
+        ticker = str(data['ticker']).strip().upper()
+        trans_type = str(data['type']).strip().upper()
+        shares = float(data['shares'])
+        price = float(data['price'])
+        date_str = str(data['date'])
+        commission = float(data.get('commission', 0))
+        notes = data.get('notes', None)
+        
+        # Validation
+        if trans_type not in ['BUY', 'SELL']:
+            return jsonify({'error': 'Transaction type must be BUY or SELL'}), 400
+        
+        if shares <= 0 or price <= 0:
+            return jsonify({'error': 'Shares and price must be positive'}), 400
+        
+        # Parse date
+        try:
+            from dateutil import parser
+            trans_date = parser.parse(date_str)
+        except:
+            return jsonify({'error': 'Invalid date format'}), 400
+        
+        # Create transaction
+        transaction = Transaction(
+            user_id=user_id,
+            ticker=ticker,
+            transaction_type=trans_type,
+            shares=shares,
+            price=price,
+            transaction_date=trans_date,
+            commission=commission,
+            notes=notes
+        )
+        
+        db.session.add(transaction)
+        db.session.commit()
+        
+        # Update holdings
+        _update_holdings(user_id)
+        
+        return jsonify(transaction.to_dict()), 201
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+# ==================== HELPER FUNCTIONS ====================
+
+def _detect_csv_columns(columns):
+    """Auto-detect CSV column mapping"""
+    columns_lower = [c.lower().strip() for c in columns]
+    
+    mapping = {
+        'ticker': None,
+        'transaction_type': None,
+        'shares': None,
+        'price': None,
+        'date': None,
+        'commission': None,
+        'notes': None
+    }
+    
+    # Ticker patterns
+    ticker_patterns = ['ticker', 'symbol', 'stock', 'symbol']
+    trans_type_patterns = ['type', 'transaction', 'action', 'side']
+    shares_patterns = ['shares', 'quantity', 'qty', 'amount']
+    price_patterns = ['price', 'rate', 'cost']
+    date_patterns = ['date', 'trade date', 'transaction date']
+    commission_patterns = ['commission', 'fee', 'fees']
+    notes_patterns = ['notes', 'memo', 'description']
+    
+    for i, col in enumerate(columns_lower):
+        # Ticker
+        if mapping['ticker'] is None and any(p in col for p in ticker_patterns):
+            mapping['ticker'] = i
+        # Type
+        elif mapping['transaction_type'] is None and any(p in col for p in trans_type_patterns):
+            mapping['transaction_type'] = i
+        # Shares
+        elif mapping['shares'] is None and any(p in col for p in shares_patterns):
+            mapping['shares'] = i
+        # Price
+        elif mapping['price'] is None and any(p in col for p in price_patterns):
+            mapping['price'] = i
+        # Date
+        elif mapping['date'] is None and any(p in col for p in date_patterns):
+            mapping['date'] = i
+        # Commission
+        elif mapping['commission'] is None and any(p in col for p in commission_patterns):
+            mapping['commission'] = i
+        # Notes
+        elif mapping['notes'] is None and any(p in col for p in notes_patterns):
+            mapping['notes'] = i
+    
+    return mapping
+
+def _update_holdings(user_id):
+    """Recalculate holdings based on transactions"""
+    # Get all transactions for user, grouped by ticker
+    transactions = Transaction.query.filter_by(user_id=user_id).order_by(Transaction.transaction_date).all()
+    
+    holdings_dict = {}
+    
+    for trans in transactions:
+        ticker = trans.ticker
+        if ticker not in holdings_dict:
+            holdings_dict[ticker] = {
+                'shares': 0,
+                'total_cost': 0,
+                'last_price': trans.price
+            }
+        
+        if trans.transaction_type == 'BUY':
+            holdings_dict[ticker]['shares'] += trans.shares
+            holdings_dict[ticker]['total_cost'] += (trans.shares * trans.price) + trans.commission
+            holdings_dict[ticker]['last_price'] = trans.price
+        else:  # SELL
+            holdings_dict[ticker]['shares'] -= trans.shares
+            holdings_dict[ticker]['total_cost'] -= (trans.shares * trans.price) - trans.commission
+    
+    # Update database
+    for ticker, data in holdings_dict.items():
+        if data['shares'] > 0:
+            avg_cost = data['total_cost'] / data['shares'] if data['shares'] > 0 else 0
+            
+            # Update or create Holding
+            holding = Holding.query.filter_by(user_id=user_id, ticker=ticker).first()
+            if holding:
+                holding.shares = data['shares']
+                holding.average_cost = avg_cost
+            else:
+                holding = Holding(
+                    user_id=user_id,
+                    ticker=ticker,
+                    shares=data['shares'],
+                    average_cost=avg_cost
+                )
+                db.session.add(holding)
+        else:
+            # Remove holding if shares = 0
+            holding = Holding.query.filter_by(user_id=user_id, ticker=ticker).first()
+            if holding:
+                db.session.delete(holding)
+    
+    db.session.commit()
+
+@app.route('/api/price-history', methods=['POST'])
+def get_price_history():
+    try:
+        data = request.get_json()
+        ticker = data.get('ticker', '').strip().upper()
+        date_str = data.get('date')
+        
+        if not ticker or not date_str:
+            return jsonify({'error': 'ticker and date are required'}), 400
+        
+        # Parse date
+        from datetime import datetime, timedelta
+        try:
+            from dateutil import parser
+            date_obj = parser.parse(date_str)
+        except:
+            return jsonify({'error': 'Invalid date format'}), 400
+        
+        # Fetch price for a small range around the date (since market may be closed)
+        start_date = date_obj - timedelta(days=5)
+        end_date = date_obj + timedelta(days=1)
+        
+        hist = yf.Ticker(ticker).history(start=start_date, end=end_date)
+        
+        if hist.empty:
+            return jsonify({'error': f'No price data found for {ticker} around {date_str}'}), 404
+        
+        # Strip timezone from hist.index to make it naive (assuming UTC)
+        hist.index = hist.index.tz_localize(None)
+        
+        # Ensure date_obj is naive for consistency
+        date_obj_naive = date_obj.replace(tzinfo=None) if date_obj.tzinfo else date_obj
+        date_obj_ts = pd.Timestamp(date_obj_naive.date())
+        
+        # Find closest date to the requested date
+        # Use pd.Series to enable .abs() on TimedeltaIndex
+        time_diffs = pd.Series(hist.index - date_obj_ts)
+        closest_idx = time_diffs.abs().argmin()
+        closest_date = hist.index[closest_idx].date()
+        
+        price = float(hist['Close'].iloc[closest_idx])
+        
+        return jsonify({
+            'ticker': ticker,
+            'date': closest_date.isoformat(),
+            'price': round(price, 2),
+            'source': 'historical'
+        }), 200
+    
+    except Exception as e:
+        print(f"Price history error: {str(e)}")
+        return jsonify({'error': f'Failed to fetch price: {str(e)}'}), 500
+
+@app.route('/api/sync/holdings', methods=['POST'])
+def sync_holdings():
+    """Manually sync holdings from transactions (for maintenance/debugging)"""
+    try:
+        user_id = request.headers.get('X-User-ID')
+        if not user_id:
+            return jsonify({'error': 'Unauthorized'}), 401
+        
+        user_id = int(user_id)
+        user = db.session.get(User, user_id)
+        if not user:
+            return jsonify({'error': 'Unauthorized'}), 401
+        
+        # Recalculate holdings for this user
+        _update_holdings(user_id)
+        
+        # Return updated holdings
+        user_holdings = Holding.query.filter_by(user_id=user_id).all()
+        
+        return jsonify({
+            'success': True,
+            'message': f'Holdings synced. Total holdings: {len(user_holdings)}',
+            'holdings': [h.to_dict() for h in user_holdings]
+        }), 200
+    
+    except Exception as e:
+        return jsonify({'error': f'Sync failed: {str(e)}'}), 500
 
 if __name__ == '__main__':
     print("Starting Flask server on http://localhost:5001")

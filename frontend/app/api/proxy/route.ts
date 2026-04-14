@@ -24,3 +24,35 @@ export async function GET(request: Request) {
     return Response.json({ error: 'Failed to fetch from backend' }, { status: 500 });
   }
 }
+
+export async function POST(request: Request) {
+  const { searchParams } = new URL(request.url);
+  const endpoint = searchParams.get('endpoint');
+  
+  // Get headers from the original request
+  const headers = new Headers(request.headers);
+  const userId = request.headers.get('X-User-ID');
+  if (userId) {
+    headers.set('X-User-ID', userId);
+  }
+
+  if (!endpoint) {
+    return Response.json({ error: 'No endpoint specified' }, { status: 400 });
+  }
+
+  try {
+    const body = await request.text();
+    const backendUrl = `http://localhost:5001/api/${endpoint}`;
+    const response = await fetch(backendUrl, {
+      method: 'POST',
+      headers,
+      body
+    });
+    
+    const data = await response.json();
+    return Response.json(data, { status: response.status });
+  } catch (error) {
+    console.error('Proxy error:', error);
+    return Response.json({ error: 'Failed to fetch from backend' }, { status: 500 });
+  }
+}

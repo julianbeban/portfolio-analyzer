@@ -17,6 +17,7 @@ export default function Header() {
         <nav className="hidden md:flex gap-8 text-sm font-medium text-neutral-700 dark:text-neutral-300">
           <Link href="/" className="hover:text-black dark:hover:text-white transition">Dashboard</Link>
           <Link href="/holdings" className="hover:text-black dark:hover:text-white transition">Holdings</Link>
+          <Link href="/transactions" className="hover:text-black dark:hover:text-white transition">Transactions</Link>
           <Link href="/watchlist" className="hover:text-black dark:hover:text-white transition">Watchlist</Link>
           <Link href="/analysis" className="hover:text-black dark:hover:text-white transition">Analysis</Link>
           <Link href="/settings" className="hover:text-black dark:hover:text-white transition">Settings</Link>

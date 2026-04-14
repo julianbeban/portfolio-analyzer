@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import Header from '@/app/components/Header';
 import Footer from '@/app/components/Footer';
 
@@ -39,8 +39,12 @@ export default function Home() {
   const [watchlist, setWatchlist] = useState<Stock[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const hasFetched = useRef(false);
 
   useEffect(() => {
+    if (hasFetched.current) return;
+    hasFetched.current = true;
+
     const fetchData = async () => {
       try {
       setLoading(true);
@@ -84,11 +88,34 @@ export default function Home() {
         const statsData = await statsRes.json();
         const holdingsData = await holdingsRes.json();
 
+        const totalValue = Number(statsData.totalValue || 0);
+        const todayGain = Number(statsData.todayGain || 0);
+        const todayGainPercent = Number(statsData.todayGainPercent || 0);
+        const ytdReturn = Number(statsData.ytdReturn || 0);
+        const portfolioReturn = Number(statsData.portfolioReturn || 0);
+        const portfolioReturnPercent = Number(statsData.portfolioReturnPercent || 0);
+
         setPortfolioStats([
-          { label: "Total Value", value: `$${statsData.totalValue?.toLocaleString('en-US', {minimumFractionDigits: 2})}`, change: `${statsData.todayGainPercent}%` },
-          { label: "Today's Gain/Loss", value: `$${statsData.todayGain?.toLocaleString('en-US', {minimumFractionDigits: 2})}`, change: `${statsData.todayGainPercent}%` },
-          { label: "Year to Date", value: `+${statsData.ytdReturn}%`, change: "vs S&P 500" },
-          { label: "Portfolio Return", value: `$${statsData.portfolioReturn?.toLocaleString('en-US', {minimumFractionDigits: 2})}`, change: `${((statsData.cashAvailable / (statsData.totalValue + statsData.cashAvailable)) * 100).toFixed(1)}% of total` },
+          {
+            label: "Total Value",
+            value: `$${totalValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+            change: `${portfolioReturnPercent >= 0 ? '+' : ''}${portfolioReturnPercent.toFixed(2)}%`
+          },
+          {
+            label: "Today's Gain/Loss",
+            value: `${todayGain >= 0 ? '+' : ''}$${todayGain.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+            change: `${todayGainPercent >= 0 ? '+' : ''}${todayGainPercent.toFixed(2)}%`
+          },
+          {
+            label: "Year to Date",
+            value: `${ytdReturn >= 0 ? '+' : ''}${ytdReturn.toFixed(2)}%`,
+            change: "vs S&P 500"
+          },
+          {
+            label: "Portfolio Return",
+            value: `${portfolioReturn >= 0 ? '+' : ''}$${portfolioReturn.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+            change: `${portfolioReturnPercent >= 0 ? '+' : ''}${portfolioReturnPercent.toFixed(2)}%`
+          }
         ]);
         setHoldings(holdingsData || []);
       }
@@ -134,7 +161,11 @@ export default function Home() {
                   <div key={idx} className="bg-white dark:bg-neutral-900 rounded-lg border border-neutral-200 dark:border-neutral-700 p-6">
                     <p className="text-sm text-neutral-600 dark:text-neutral-400 mb-2">{stat.label}</p>
                     <p className="text-2xl font-bold text-black dark:text-white mb-1">{stat.value}</p>
-                    <p className="text-xs font-medium text-green-600 dark:text-green-400">{stat.change}</p>
+                    <p className={`text-xs font-medium ${
+                      stat.change.includes('-') && stat.change !== '–'
+                        ? 'text-red-600 dark:text-red-400'
+                        : 'text-green-600 dark:text-green-400'
+                    }`}>{stat.change}</p>
                   </div>
                 ))}
               </div>
