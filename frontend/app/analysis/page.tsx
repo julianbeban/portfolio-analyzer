@@ -176,6 +176,14 @@ export default function AnalysisPage() {
               </div>
             </div>
 
+            {/* YTD Portfolio Performance Chart */}
+            <div className="mb-8">
+              <h2 className="text-2xl font-bold text-black dark:text-white mb-4">YTD Portfolio Performance</h2>
+              <div className="bg-white dark:bg-neutral-900 rounded-lg border border-neutral-200 dark:border-neutral-700 p-6">
+                <YTDPortfolioChart tickers={results.tickers} weights={results.weights} />
+              </div>
+            </div>
+
             {/* Individual Stock Metrics */}
             <div className="mb-8">
               <h2 className="text-2xl font-bold text-black dark:text-white mb-4">Individual Stock Metrics</h2>
@@ -232,7 +240,7 @@ export default function AnalysisPage() {
             </div>
 
             {/* Correlation Matrix */}
-            <div>
+            <div className="mb-8">
               <h2 className="text-2xl font-bold text-black dark:text-white mb-2">Correlation Matrix</h2>
               <p className="text-sm text-neutral-600 dark:text-neutral-400 mb-4">
                 Shows how your holdings move together (1.0 = perfect correlation, -1.0 = inverse correlation)
@@ -274,11 +282,222 @@ export default function AnalysisPage() {
                 </div>
               </div>
             </div>
+
+            {/* Metrics Explanation */}
+            <div className="mb-8">
+              <h2 className="text-2xl font-bold text-black dark:text-white mb-4">Understanding the Metrics</h2>
+              <div className="bg-white dark:bg-neutral-900 rounded-lg border border-neutral-200 dark:border-neutral-700 p-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div>
+                    <h3 className="text-lg font-semibold text-black dark:text-white mb-2">Beta</h3>
+                    <p className="text-sm text-neutral-600 dark:text-neutral-400">
+                      Beta measures how much a stock or portfolio moves relative to the overall market (S&P 500). 
+                      A beta of 1.0 means it moves in line with the market, while a beta above 1.0 indicates higher volatility and below 1.0 indicates lower volatility.
+                    </p>
+                  </div>
+                  
+                  <div>
+                    <h3 className="text-lg font-semibold text-black dark:text-white mb-2">Sharpe Ratio</h3>
+                    <p className="text-sm text-neutral-600 dark:text-neutral-400">
+                      The Sharpe Ratio measures risk-adjusted returns, showing how much return you're getting for the level of risk taken. 
+                      Higher values are better—a ratio above 1.0 is considered good, and above 2.0 is very good.
+                    </p>
+                  </div>
+                  
+                  <div>
+                    <h3 className="text-lg font-semibold text-black dark:text-white mb-2">RSI (Relative Strength Index)</h3>
+                    <p className="text-sm text-neutral-600 dark:text-neutral-400">
+                      RSI is a momentum indicator ranging from 0 to 100 that helps identify overbought or oversold conditions. 
+                      Values above 70 suggest a stock may be overbought (potentially overvalued), while values below 30 suggest it may be oversold (potentially undervalued).
+                    </p>
+                  </div>
+                  
+                  <div>
+                    <h3 className="text-lg font-semibold text-black dark:text-white mb-2">Volatility</h3>
+                    <p className="text-sm text-neutral-600 dark:text-neutral-400">
+                      Volatility measures how much a stock's price fluctuates over time, expressed as an annualized percentage. 
+                      Higher volatility means larger price swings and potentially higher risk, while lower volatility indicates more stable, predictable price movements.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         ) : null}
       </main>
 
       <Footer />
+    </div>
+  );
+}
+
+// YTD Portfolio Chart Component
+// YTD Portfolio Chart Component
+function YTDPortfolioChart({ tickers, weights }: { tickers: string[]; weights: number[] }) {
+  const [chartData, setChartData] = useState<{ date: string; value: number }[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    const fetchChartData = async () => {
+      try {
+        const response = await axios.post(
+          'http://localhost:5001/api/ytd-chart',
+          {
+            tickers: tickers,
+            weights: weights
+          },
+          {
+            headers: {
+              'Content-Type': 'application/json'
+            }
+          }
+        );
+
+        const { dates, values } = response.data;
+        
+        const chartPoints = dates.map((date: string, idx: number) => ({
+          date: new Date(date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+          value: values[idx]
+        }));
+
+        setChartData(chartPoints);
+      } catch (error: any) {
+        console.error('Error fetching chart data:', error);
+        setErrorMsg(error.response?.data?.error || 'Failed to load chart data');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchChartData();
+  }, [tickers, weights]);
+
+  if (loading) {
+    return <div className="text-center py-8 text-neutral-600 dark:text-neutral-400">Loading chart...</div>;
+  }
+
+  if (errorMsg || chartData.length === 0) {
+    return <div className="text-center py-8 text-neutral-600 dark:text-neutral-400">{errorMsg || 'No data available'}</div>;
+  }
+
+  // Simple SVG line chart
+  const width = 900;
+  const height = 400;
+  const padding = 60;
+  
+  const minValue = Math.min(...chartData.map(d => d.value));
+  const maxValue = Math.max(...chartData.map(d => d.value));
+  const range = maxValue - minValue || 1;
+
+  const points = chartData
+    .map((d, i) => {
+      const x = padding + (i / (chartData.length - 1)) * (width - 2 * padding);
+      const y = height - padding - ((d.value - minValue) / range) * (height - 2 * padding);
+      return `${x},${y}`;
+    })
+    .join(' ');
+
+  // Calculate current performance
+  const currentValue = chartData[chartData.length - 1]?.value || 100;
+  const performancePercent = currentValue - 100;
+  const performanceColor = performancePercent >= 0 ? 'rgb(34, 197, 94)' : 'rgb(239, 68, 68)';
+
+  return (
+    <div className="w-full">
+      <div className="mb-4 text-center">
+        <div className="text-3xl font-bold" style={{ color: performanceColor }}>
+          {performancePercent >= 0 ? '+' : ''}{performancePercent.toFixed(2)}%
+        </div>
+        <div className="text-sm text-neutral-500 dark:text-neutral-400">
+          YTD Performance (Starting Value: 100)
+        </div>
+      </div>
+      
+      <div className="w-full overflow-x-auto">
+        <svg width={width} height={height} className="mx-auto">
+          {/* Grid lines */}
+          <line x1={padding} y1={padding} x2={padding} y2={height - padding} stroke="currentColor" strokeWidth="2" className="text-neutral-300 dark:text-neutral-700" />
+          <line x1={padding} y1={height - padding} x2={width - padding} y2={height - padding} stroke="currentColor" strokeWidth="2" className="text-neutral-300 dark:text-neutral-700" />
+          
+          {/* Horizontal grid lines */}
+          {[0, 0.25, 0.5, 0.75, 1].map(pct => {
+            const y = height - padding - pct * (height - 2 * padding);
+            const value = minValue + pct * range;
+            return (
+              <g key={pct}>
+                <line
+                  x1={padding}
+                  y1={y}
+                  x2={width - padding}
+                  y2={y}
+                  stroke="currentColor"
+                  strokeWidth="1"
+                  strokeDasharray="3,3"
+                  className="text-neutral-200 dark:text-neutral-800"
+                />
+                <text
+                  x={padding - 10}
+                  y={y + 4}
+                  textAnchor="end"
+                  className="text-xs fill-neutral-600 dark:fill-neutral-400"
+                >
+                  {value.toFixed(1)}
+                </text>
+              </g>
+            );
+          })}
+          
+          {/* 100 baseline (starting value) */}
+          {minValue <= 100 && maxValue >= 100 && (
+            <line
+              x1={padding}
+              y1={height - padding - ((100 - minValue) / range) * (height - 2 * padding)}
+              x2={width - padding}
+              y2={height - padding - ((100 - minValue) / range) * (height - 2 * padding)}
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeDasharray="5,5"
+              className="text-neutral-400 dark:text-neutral-600"
+            />
+          )}
+          
+          {/* Area fill under the line */}
+          <polygon
+            points={`${padding},${height - padding} ${points} ${width - padding},${height - padding}`}
+            fill={performanceColor}
+            opacity="0.1"
+          />
+          
+          {/* Line chart */}
+          <polyline
+            points={points}
+            fill="none"
+            stroke={performanceColor}
+            strokeWidth="3"
+          />
+          
+          {/* Date labels */}
+          {[0, Math.floor(chartData.length / 2), chartData.length - 1].map(idx => {
+            const x = padding + (idx / (chartData.length - 1)) * (width - 2 * padding);
+            return (
+              <text
+                key={idx}
+                x={x}
+                y={height - padding + 20}
+                textAnchor="middle"
+                className="text-xs fill-neutral-600 dark:fill-neutral-400"
+              >
+                {chartData[idx]?.date}
+              </text>
+            );
+          })}
+        </svg>
+      </div>
+      
+      <p className="text-xs text-center text-neutral-500 dark:text-neutral-400 mt-4">
+        Portfolio indexed to 100 at start of {new Date().getFullYear()}. Current value: {currentValue.toFixed(2)}
+      </p>
     </div>
   );
 }

@@ -1131,6 +1131,116 @@ def get_price_history():
         print(f"Price history error: {str(e)}")
         return jsonify({'error': f'Failed to fetch price: {str(e)}'}), 500
 
+@app.route('/api/ytd-chart', methods=['POST'])
+def ytd_chart():
+    try:
+        data = request.get_json()
+        tickers = data.get('tickers', [])
+        weights = data.get('weights', [])
+        
+        if not tickers:
+            return jsonify({'error': 'No tickers provided'}), 400
+        
+        # Get year-to-date data
+        now = datetime.now()
+        start_date = datetime(now.year, 1, 1)
+        
+        # Fetch data for all tickers individually
+        all_data = {}
+        for ticker in tickers:
+            try:
+                stock = yf.Ticker(ticker)
+                hist = stock.history(start=start_date, end=now)
+                if not hist.empty:
+                    all_data[ticker] = hist['Close']
+            except Exception as e:
+                print(f"Error fetching {ticker}: {e}")
+                continue
+        
+        if not all_data:
+            return jsonify({'error': 'No data available'}), 400
+        
+        # Get all unique dates across all tickers
+        all_dates = set()
+        for ticker_data in all_data.values():
+            all_dates.update(ticker_data.index.tolist())
+        
+        all_dates = sorted(list(all_dates))
+        
+        # Calculate portfolio value for each date
+        portfolio_values = []
+        date_strings = []
+        
+        for date in all_dates:
+            total_value = 0
+            has_data = False
+            
+            for i, ticker in enumerate(tickers):
+                if ticker in all_data:
+                    ticker_series = all_data[ticker]
+                    # Use .get() method which returns None if date doesn't exist
+                    try:
+                        if date in ticker_series.index:
+                            price = ticker_series[date]
+                            if pd.notna(price):
+                                total_value += float(price) * weights[i]
+                                has_data = True
+                    except:
+                        continue
+            
+            if has_data and total_value > 0:
+                portfolio_values.append(total_value)
+                date_strings.append(date.strftime('%Y-%m-%d'))
+        
+        # Normalize to base 100
+        if portfolio_values:
+            start_value = portfolio_values[0]
+            normalized_values = [(val / start_value) * 100 for val in portfolio_values]
+            
+            return jsonify({
+                'dates': date_strings,
+                'values': normalized_values
+            })
+        else:
+            return jsonify({'error': 'No valid data points'}), 400
+            
+    except Exception as e:
+        print(f"YTD Chart error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/sync/holdings', methods=['POST'])
+def sync_holdings():
+    """Manually sync holdings from transactions (for maintenance/debugging)"""
+    try:
+        user_id = request.headers.get('X-User-ID')
+        if not user_id:
+            return jsonify({'error': 'Unauthorized'}), 401
+        
+        user_id = int(user_id)
+        user = db.session.get(User, user_id)
+        if not user:
+            return jsonify({'error': 'Unauthorized'}), 401
+        
+        # Recalculate holdings for this user
+        _update_holdings(user_id)
+        
+        # Return updated holdings
+        user_holdings = Holding.query.filter_by(user_id=user_id).all()
+        
+        return jsonify({
+            'success': True,
+            'message': f'Holdings synced. Total holdings: {len(user_holdings)}',
+            'holdings': [h.to_dict() for h in user_holdings]
+        }), 200
+    
+    except Exception as e:
+        return jsonify({'error': f'Sync failed: {str(e)}'}), 500
+
+if __name__ == '__main__':
+    print("Starting Flask server on http://localhost:5001")
+    app.run(debug=True, port=5001, host='127.0.0.1')
 @app.route('/api/sync/holdings', methods=['POST'])
 def sync_holdings():
     """Manually sync holdings from transactions (for maintenance/debugging)"""
