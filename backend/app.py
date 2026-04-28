@@ -23,6 +23,16 @@ _watchlist_cache = {
 app = Flask(__name__)
 limiter = Limiter(get_remote_address, app=app, default_limits=["200 per day", "50 per hour"])
 
+def clean_nan_values(obj):
+    """Replace NaN values with None for JSON serialization"""
+    if isinstance(obj, dict):
+        return {k: clean_nan_values(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [clean_nan_values(item) for item in obj]
+    elif isinstance(obj, float) and math.isnan(obj):
+        return None
+    return obj
+
 load_dotenv()
 
 CORS(app,resources={r"/api/*": {"origins": "http://localhost:3000"}})  # Allow requests from Next.js 
@@ -347,10 +357,11 @@ def analyze_portfolio():
         
         # PORTFOLIO METRICS (Equal Weighted)
         # Calculate equal-weighted portfolio returns
-        portfolio_returns = returns.mean(axis=1)  # Equal weight = average across stocks
+        weighted_returns = (returns * weights).sum(axis=1)
+        # Equal weight = average across stocks
 
         aligned_data = pd.DataFrame({
-            'portfolio': portfolio_returns,
+            'portfolio': weighted_returns,
             'sp500': sp500_returns
         }).dropna()
 
@@ -391,7 +402,7 @@ def analyze_portfolio():
             'tickers': tickers
         }
         
-        return jsonify(response), 200
+        return jsonify(clean_nan_values(response)), 200
         
     except Exception as e:
         print(f"Error: {str(e)}")
