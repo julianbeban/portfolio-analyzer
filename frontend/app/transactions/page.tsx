@@ -2,6 +2,7 @@
 
 import { useState, useEffect, FormEvent, ChangeEvent, useRef } from 'react';
 import { useRouter } from 'next/navigation';
+import { getLocalDateString } from '@/app/lib/date';
 import Header from '@/app/components/Header';
 import Footer from '@/app/components/Footer';
 
@@ -66,7 +67,7 @@ export default function TransactionsPage() {
     type: 'BUY',
     shares: 0,
     price: 0,
-    date: new Date().toISOString().split('T')[0],
+    date: getLocalDateString(),
     commission: 0,
     notes: ''
   });

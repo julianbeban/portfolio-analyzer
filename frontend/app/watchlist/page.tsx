@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
+import { getLocalDateString } from '@/app/lib/date';
 import Header from '@/app/components/Header';
 import Footer from '@/app/components/Footer';
 
@@ -114,7 +115,7 @@ export default function WatchlistPage() {
 
     // Fetch fresh price in the background
     try {
-      const today = new Date().toLocaleDateString('en-CA'); // gives YYYY-MM-DD in local time
+      const today = getLocalDateString();
       const res = await fetch('/api/proxy?endpoint=price-history', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -174,7 +175,7 @@ export default function WatchlistPage() {
           type: 'BUY',
           shares,
           price: quickBuy.currentPrice,
-          date: new Date().toLocaleDateString('en-CA'),
+          date: getLocalDateString(),
           commission: 0
         })
       });
