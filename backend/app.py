@@ -11,13 +11,23 @@ from dotenv import load_dotenv
 from models import db, User, Transaction, Holding
 import math
 
+def clean_nan_values(obj):
+    """Replace NaN values with None for JSON serialization"""
+    if isinstance(obj, dict):
+        return {k: clean_nan_values(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [clean_nan_values(item) for item in obj]
+    elif isinstance(obj, float) and math.isnan(obj):
+        return None
+    return obj
+
 load_dotenv()
 
 app = Flask(__name__)
 CORS(app,resources={r"/api/*": {"origins": "http://localhost:3000"}})  # Allow requests from Next.js 
 
 # Configuration
-app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'sqlite:///instance/portfolio.db')
+app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'sqlite:///portfolio.db')
 
 # Initialize extensions
 db.init_app(app)
@@ -253,10 +263,11 @@ def analyze_portfolio():
         
         # PORTFOLIO METRICS (Equal Weighted)
         # Calculate equal-weighted portfolio returns
-        portfolio_returns = returns.mean(axis=1)  # Equal weight = average across stocks
+        weighted_returns = (returns * weights).sum(axis=1)
+        # Equal weight = average across stocks
 
         aligned_data = pd.DataFrame({
-            'portfolio': portfolio_returns,
+            'portfolio': weighted_returns,
             'sp500': sp500_returns
         }).dropna()
 
@@ -297,7 +308,7 @@ def analyze_portfolio():
             'tickers': tickers
         }
         
-        return jsonify(response), 200
+        return jsonify(clean_nan_values(response)), 200
         
     except Exception as e:
         print(f"Error: {str(e)}")
