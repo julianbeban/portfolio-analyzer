@@ -205,7 +205,7 @@ export default function TransactionsPage() {
           type: 'BUY',
           shares: 0,
           price: 0,
-          date: new Date().toISOString().split('T')[0],
+          date: new Date().toLocaleDateString('en-CA'),
           commission: 0,
           notes: ''
         });
